@@ -8,7 +8,6 @@ from typing import Any
 
 import chromadb
 import pandas as pd
-from chromadb.utils import embedding_functions
 
 import config
 from download import download_dataset
@@ -19,21 +18,14 @@ logger = logging.getLogger("indexer")
 BATCH_SIZE = 1000
 
 
-def _clean(value: Any) -> Any:
-    """Coerce NaN/NaT to None so Chroma metadata stays JSON-serialisable."""
-    if value is None:
-        return None
-    if isinstance(value, float) and math.isnan(value):
-        return None
-    return value
-
-
 def _build_metadata(row: pd.Series, row_id: int) -> dict[str, Any]:
+    """Metadata for one embedded row. Chroma rejects None, so NaN/missing becomes ''."""
     meta: dict[str, Any] = {"row_id": int(row_id)}
     for field in config.METADATA_FIELDS:
-        meta[field] = _clean(row.get(field))
-    # Chroma rejects None metadata values; replace with empty string / sentinel.
-    return {k: ("" if v is None else v) for k, v in meta.items()}
+        value = row.get(field)
+        is_nan = isinstance(value, float) and math.isnan(value)
+        meta[field] = "" if value is None or is_nan else value
+    return meta
 
 
 def build_index(sample: int, collection_name: str, refresh_data: bool = False) -> None:
@@ -52,9 +44,7 @@ def build_index(sample: int, collection_name: str, refresh_data: bool = False) -
     # Drop rows without a description — nothing to embed.
     df = df[df["description"].notna()]
 
-    embedding_fn = embedding_functions.SentenceTransformerEmbeddingFunction(
-        model_name=config.EMBEDDING_MODEL
-    )
+    embedding_fn = config.get_embedding_function()
     client = chromadb.PersistentClient(path=str(config.CHROMA_DIR))
     # Start clean so re-running build-index doesn't duplicate documents.
     try:

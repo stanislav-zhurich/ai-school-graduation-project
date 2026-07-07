@@ -42,9 +42,8 @@ def _apply_filters(df: pd.DataFrame, filters: dict[str, Any] | None) -> pd.DataF
     if not filters:
         return df
     out = df
-    eq = {"country": "country", "variety": "variety", "province": "province"}
-    for key, col in eq.items():
-        val = filters.get(key)
+    for col in ("country", "variety", "province"):
+        val = filters.get(col)
         if val:
             out = out[out[col].astype(str).str.casefold() == str(val).casefold()]
     if filters.get("min_points") is not None:

@@ -1,15 +1,9 @@
-"""The LLM agent: an Azure OpenAI tool-use loop wired to two retrieval paths.
-
-Tools exposed to the model:
-  * ``search_wine_descriptions`` — local RAG over ChromaDB (semantic search).
-  * the MCP server's Pandas tools — spawned in-process over stdio.
-
-The agent decides per question which tool(s) to call; some questions need both.
-"""
+"""Azure OpenAI tool-use loop wired to two retrieval paths: RAG and MCP."""
 from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import sys
 from pathlib import Path
 from typing import Any
@@ -19,6 +13,9 @@ from mcp.client.stdio import stdio_client
 
 import config
 import rag
+
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+logger = logging.getLogger("agent")
 
 SRC_DIR = Path(__file__).resolve().parent
 
@@ -38,7 +35,6 @@ use semantic search for "earthy" and structured filters for the rest, then combi
 Call describe_schema first if you are unsure which values exist. Ground every claim in \
 tool results; never invent wines, scores, or prices. Cite wine titles where helpful."""
 
-# OpenAI tool definition for the local RAG path.
 RAG_TOOL = {
     "type": "function",
     "function": {
@@ -68,49 +64,54 @@ RAG_TOOL = {
 
 
 def _mcp_tools_to_openai(mcp_tools: list[Any]) -> list[dict[str, Any]]:
-    """Convert MCP tool definitions into OpenAI ``tools`` entries."""
-    converted: list[dict[str, Any]] = []
-    for tool in mcp_tools:
-        converted.append(
-            {
-                "type": "function",
-                "function": {
-                    "name": tool.name,
-                    "description": tool.description or "",
-                    "parameters": tool.inputSchema
-                    or {"type": "object", "properties": {}},
-                },
-            }
-        )
-    return converted
+    return [
+        {
+            "type": "function",
+            "function": {
+                "name": tool.name,
+                "description": tool.description or "",
+                "parameters": tool.inputSchema or {"type": "object", "properties": {}},
+            },
+        }
+        for tool in mcp_tools
+    ]
 
 
 def _mcp_result_to_text(result: Any) -> str:
-    """Flatten an MCP CallToolResult's content blocks into a string."""
-    parts: list[str] = []
-    for block in getattr(result, "content", []) or []:
-        text = getattr(block, "text", None)
-        if text is not None:
-            parts.append(text)
-    return "\n".join(parts) if parts else "[no content]"
+    blocks = getattr(result, "content", None) or []
+    texts = [b.text for b in blocks if getattr(b, "text", None) is not None]
+    return "\n".join(texts) if texts else "[no content]"
+
+
+async def _call_tool(session: ClientSession, mcp_tool_names: set[str], name: str, args: dict) -> str:
+    try:
+        if name == "search_wine_descriptions":
+            logger.info("Routing to RAG: %s(%s)", name, args)
+            return json.dumps(rag.search_wine_descriptions(**args))
+        if name in mcp_tool_names:
+            logger.info("Routing to MCP: %s(%s)", name, args)
+            return _mcp_result_to_text(await session.call_tool(name, args))
+        logger.warning("Model called unknown tool: %s", name)
+        return f"[unknown tool: {name}]"
+    except Exception as exc:
+        logger.exception("Tool %s raised an error", name)
+        return f"[tool error] {exc}"
 
 
 async def _run_agent_async(history: list[dict[str, str]], max_turns: int = 8) -> str:
-    """Drive the tool-use loop for one user turn and return the final assistant text."""
     client = config.get_llm_client()
-
     server_params = StdioServerParameters(
         command=sys.executable,
         args=["-m", "mcp_server"],
-        cwd=str(SRC_DIR),  # so `-m mcp_server` resolves the flat module
+        cwd=str(SRC_DIR),
     )
 
     async with stdio_client(server_params) as (read, write):
         async with ClientSession(read, write) as session:
             await session.initialize()
             mcp_tools = (await session.list_tools()).tools
-            tools = [RAG_TOOL, *_mcp_tools_to_openai(mcp_tools)]
             mcp_tool_names = {t.name for t in mcp_tools}
+            tools = [RAG_TOOL, *_mcp_tools_to_openai(mcp_tools)]
 
             messages: list[dict[str, Any]] = [
                 {"role": "system", "content": SYSTEM_PROMPT},
@@ -124,41 +125,26 @@ async def _run_agent_async(history: list[dict[str, str]], max_turns: int = 8) ->
                     tools=tools,
                 )
                 msg = response.choices[0].message
+
                 if not msg.tool_calls:
                     return msg.content or ""
 
-                messages.append(msg)  # assistant turn carrying the tool calls
+                messages.append(msg)
                 for call in msg.tool_calls:
+                    name = call.function.name
                     try:
                         args = json.loads(call.function.arguments or "{}")
                     except json.JSONDecodeError:
+                        logger.warning("Bad arguments for %s: %r", name, call.function.arguments)
                         args = {}
-                    name = call.function.name
-                    try:
-                        if name == "search_wine_descriptions":
-                            content = json.dumps(rag.search_wine_descriptions(**args))
-                        elif name in mcp_tool_names:
-                            content = _mcp_result_to_text(
-                                await session.call_tool(name, args)
-                            )
-                        else:
-                            content = f"[unknown tool: {name}]"
-                    except Exception as exc:  # surface tool errors back to the model
-                        content = f"[tool error] {exc}"
-                    messages.append(
-                        {
-                            "role": "tool",
-                            "tool_call_id": call.id,
-                            "content": content,
-                        }
-                    )
 
+                    content = await _call_tool(session, mcp_tool_names, name, args)
+                    messages.append({"role": "tool", "tool_call_id": call.id, "content": content})
+
+            logger.warning("Hit max tool-call budget (%d iterations).", max_turns)
             return "I wasn't able to complete the request within the tool-call budget."
 
 
 def run_agent(history: list[dict[str, str]]) -> str:
-    """Synchronous wrapper for Streamlit: run one agent turn given the chat history.
-
-    ``history`` is a list of ``{"role": "user"|"assistant", "content": str}`` messages.
-    """
+    """Synchronous entry point for Streamlit: run one agent turn given the chat history."""
     return asyncio.run(_run_agent_async(history))

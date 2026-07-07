@@ -5,7 +5,6 @@ from functools import lru_cache
 from typing import Any
 
 import chromadb
-from chromadb.utils import embedding_functions
 
 import config
 
@@ -13,9 +12,7 @@ import config
 @lru_cache(maxsize=1)
 def get_collection():
     """Open (and cache) the persistent ``wines`` collection with its embedding function."""
-    embedding_fn = embedding_functions.SentenceTransformerEmbeddingFunction(
-        model_name=config.EMBEDDING_MODEL
-    )
+    embedding_fn = config.get_embedding_function()
     client = chromadb.PersistentClient(path=str(config.CHROMA_DIR))
     return client.get_collection(
         name=config.COLLECTION_NAME, embedding_function=embedding_fn

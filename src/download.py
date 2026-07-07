@@ -2,9 +2,10 @@
 from __future__ import annotations
 
 import logging
+import shutil
+from pathlib import Path
 
 import kagglehub
-from kagglehub import KaggleDatasetAdapter
 
 import config
 
@@ -20,20 +21,25 @@ def download_dataset(force: bool = False) -> None:
 
     Reusable from ``build-index`` so first-time setup is a single command.
     Pass ``force=True`` to re-download even when the file is present.
+
+    We fetch the raw dataset files with ``dataset_download`` and copy the CSV
+    ourselves, rather than using kagglehub's PANDAS adapter (which mis-parses this
+    particular file). The CSV is standard UTF-8, so downstream reads are unambiguous.
     """
     if config.DATA_CSV.exists() and not force:
         logger.info("%s already exists — skipping download.", config.DATA_CSV)
         return
 
     config.DATA_DIR.mkdir(parents=True, exist_ok=True)
-    logger.info("Loading %s (%s) from Kaggle...", DATASET, SOURCE_FILE)
-    df = kagglehub.load_dataset(
-        KaggleDatasetAdapter.PANDAS,
-        DATASET,
-        SOURCE_FILE,
-    )
-    df.to_csv(config.DATA_CSV, index=False)
-    logger.info("Saved %d rows to %s", len(df), config.DATA_CSV)
+    logger.info("Downloading %s from Kaggle...", DATASET)
+    dataset_dir = Path(kagglehub.dataset_download(DATASET, force_download=force))
+
+    source = dataset_dir / SOURCE_FILE
+    if not source.exists():
+        raise FileNotFoundError(f"{SOURCE_FILE} not found in downloaded dataset {dataset_dir}")
+
+    shutil.copyfile(source, config.DATA_CSV)
+    logger.info("Saved %s", config.DATA_CSV)
 
 
 def main() -> None:

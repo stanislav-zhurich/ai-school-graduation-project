@@ -5,7 +5,8 @@ A Python chatbot that answers questions about the Kaggle **Wine Reviews** datase
 file `winemag-data-130k-v2.csv`) by combining two retrieval paths under an LLM agent:
 
 1. **RAG path** — semantic search over the free-text `description` (tasting notes)
-   column using **ChromaDB** + `sentence-transformers/all-MiniLM-L6-v2` embeddings.
+   column using **ChromaDB** + Azure OpenAI `text-embedding-3-small-1` embeddings
+   (served via the EPAM proxy — same endpoint as the chat model).
 2. **MCP server path** — an **MCP** server exposing **Pandas** tools for structured
    queries (filtering, aggregation, ranking) over columns like `country`, `variety`,
    `points`, `price`, `province`, `winery`, and `title`.
@@ -46,7 +47,8 @@ at least 90 points"* uses semantic search for *earthy* and structured filters fo
 ├── data/                   # gitignored — populated by `download-data`
 ├── chroma_db/              # gitignored — populated by `build-index`
 └── src/                    # flat module layout
-    ├── config.py           # env loading + Azure OpenAI client factory
+    ├── config.py           # env loading + Azure OpenAI client factories
+    ├── embeddings.py       # Chroma embedding function backed by Azure OpenAI
     ├── download.py         # download-data
     ├── indexer.py          # build-index (embeds descriptions into ChromaDB)
     ├── mcp_server.py        # run-mcp  (four Pandas tools)
@@ -61,7 +63,8 @@ at least 90 points"* uses semantic search for *earthy* and structured filters fo
 - [**uv**](https://docs.astral.sh/uv/) for package management
 - **Kaggle credentials** for `download-data` — set `KAGGLE_USERNAME` / `KAGGLE_KEY`
   or place `~/.kaggle/kaggle.json` (see the [kagglehub docs](https://github.com/Kaggle/kagglehub)).
-- An **`OPENAI_API_KEY`** for the EPAM Azure OpenAI proxy (`https://ai-proxy.lab.epam.com`).
+- An **`OPENAI_API_KEY`** for the EPAM Azure OpenAI proxy (`https://ai-proxy.lab.epam.com`) —
+  needed for both `build-index` (embeddings) and `run-app` (chat).
 - **Node.js / npx** (only for the MCP Inspector, optional).
 
 ## Install
@@ -103,7 +106,9 @@ uv run build-index --refresh-data
 # Download only (standalone) — build-index does this for you, so this is optional
 uv run download-data
 
-# Run the MCP server standalone — used by the Inspector
+# Run the MCP server standalone (stdio). On its own it just waits for JSON-RPC on
+# stdin — mainly useful as a quick "does it start?" check. To interact with it, use
+# the MCP Inspector below (which launches this command for you).
 uv run run-mcp
 ```
 
