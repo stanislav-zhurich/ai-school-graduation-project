@@ -46,15 +46,19 @@ at least 90 points"* uses semantic search for *earthy* and structured filters fo
 ├── .gitignore
 ├── data/                   # gitignored — populated by `download-data`
 ├── chroma_db/              # gitignored — populated by `build-index`
-└── src/                    # flat module layout
-    ├── config.py           # env loading + Azure OpenAI client factories
-    ├── embeddings.py       # Chroma embedding function backed by Azure OpenAI
-    ├── download.py         # download-data
-    ├── indexer.py          # build-index (embeds descriptions into ChromaDB)
-    ├── mcp_server.py        # run-mcp  (four Pandas tools)
-    ├── rag.py              # ChromaDB query helpers used by the agent
-    ├── agent.py            # LLM agent: tool definitions + routing loop
-    └── app.py              # run-app (Streamlit chat)
+├── src/                    # flat module layout
+│   ├── config.py           # env loading + Azure OpenAI client factories
+│   ├── embeddings.py       # Chroma embedding function backed by Azure OpenAI
+│   ├── download.py         # download-data
+│   ├── indexer.py          # build-index (embeds descriptions into ChromaDB)
+│   ├── mcp_server.py       # run-mcp  (four Pandas tools)
+│   ├── rag.py              # ChromaDB query helpers used by the agent
+│   ├── agent.py            # LLM agent: tool definitions + routing loop
+│   └── app.py              # run-app (Streamlit chat)
+└── tests/
+    ├── helpers.py          # assertion helpers (fuzzy numeric match, LLM-as-judge)
+    └── integration/
+        └── test_agent_e2e.py   # end-to-end answer-quality tests, see Testing below
 ```
 
 ## Prerequisites
@@ -148,6 +152,40 @@ Other questions to try:
 - *"What's the average price of wine by country?"* → `aggregate_wines`
 - *"Top 10 highest-rated wines from Italy"* → `top_wines`
 - *"Describe a bold, tannic Cabernet"* → `search_wine_descriptions`
+
+## Testing
+
+`tests/integration/test_agent_e2e.py` holds end-to-end answer-quality tests for the
+whole stack — the real Azure OpenAI model, a real MCP subprocess, and your local
+`chroma_db`. Each test asks a golden question through `run_agent` and checks the
+answer against ground truth computed independently from `data/winemag.csv` via
+pandas, rather than asserting on exact wording:
+
+- **`test_mcp_aggregate_average_price`** — a numeric aggregate ("average price of
+  Italian wine") must be close to the true pandas-computed mean.
+- **`test_mcp_top_wines_by_country`** — cited wines must be real and meet the true
+  top-3 points threshold (tolerant of tie-breaking order).
+- **`test_rag_answer_is_grounded_in_retrieval`** — cited wines must be real, and
+  their actual `description` text (not just the model's claim) must mention the
+  requested flavour notes.
+- **`test_combined_rag_and_mcp_respects_constraints`** — cited wines must be real
+  and satisfy every structured filter (variety, price, points) from the question.
+- **`test_subjective_question_is_on_topic_and_grounded`** — for a question with no
+  single correct answer (e.g. "describe a bold Cabernet"), a second LLM call grades
+  the answer for on-topic/groundedness (see `judge()` in `tests/helpers.py`).
+
+```bash
+uv sync                    # installs pytest (dev dependency group)
+uv run pytest -m integration -v -s
+```
+
+`-s` prints each case as it runs — the question asked, what's expected, the agent's
+actual answer, and how it was scored (see `report()` in `tests/helpers.py`).
+
+These tests assume `OPENAI_API_KEY` is set and the index is already built
+(`uv run build-index`) — they make several real LLM calls against your local data,
+so expect them to take ~30-60s total and to vary in wording between runs (the
+assertions are written to tolerate that, not to match exact strings).
 
 ## Notes
 

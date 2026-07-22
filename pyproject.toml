@@ -20,6 +20,16 @@ build-index = "indexer:main"
 run-mcp = "mcp_server:main"
 run-app = "app:main"
 
+[dependency-groups]
+dev = ["pytest>=8.0"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["tests"]
+markers = [
+    "integration: exercises the real Azure OpenAI + MCP + Chroma stack (requires OPENAI_API_KEY and a built index)",
+]
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"

@@ -6,6 +6,7 @@ startup and held in memory.
 from __future__ import annotations
 
 import logging
+import os
 from functools import lru_cache
 from typing import Any
 
@@ -14,7 +15,9 @@ from mcp.server.fastmcp import FastMCP
 
 import config
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+logging.basicConfig(
+    level=os.getenv("MCP_LOG_LEVEL", "INFO"), format="%(asctime)s %(levelname)s %(message)s"
+)
 logger = logging.getLogger("mcp_server")
 
 mcp = FastMCP("wine-data")

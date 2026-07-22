@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import sys
 from pathlib import Path
 from typing import Any
@@ -104,6 +105,7 @@ async def _run_agent_async(history: list[dict[str, str]], max_turns: int = 8) ->
         command=sys.executable,
         args=["-m", "mcp_server"],
         cwd=str(SRC_DIR),
+        env=dict(os.environ),
     )
 
     async with stdio_client(server_params) as (read, write):
